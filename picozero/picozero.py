@@ -1,6 +1,7 @@
 from machine import Pin, PWM, Timer, ADC
 from micropython import schedule
 from time import ticks_ms, ticks_us, sleep
+import uasyncio
 
 ###############################################################################
 # EXCEPTIONS
@@ -1577,8 +1578,11 @@ class DigitalInputDevice(InputDevice, PinMixin):
         self._when_activated = None
         self._when_deactivated = None
         
+        self._task = None
+        
         # setup interupt
         self._pin.irq(self._pin_change, Pin.IRQ_RISING | Pin.IRQ_FALLING)
+        
         
     def _state_to_value(self, state):
         return int(bool(state) == self._active_state)
@@ -1621,17 +1625,29 @@ class DigitalInputDevice(InputDevice, PinMixin):
                 
                 def schedule_callback(callback):
                     callback()
-            
-                try:
-                    schedule(schedule_callback, callback_to_run)
                     
-                except RuntimeError as e:
-                    if str(e) == "schedule queue full":
-                        raise EventFailedScheduleQueueFull(
-                            "{} - {} not run due to the micropython schedule being full".format(
-                                str(self), callback_to_run.__name__))
-                    else:
-                        raise e
+                # Handle lack of iscoroutinefunction in uasyncio
+                async def _coro():
+                    pass
+
+                coro_type = type(_coro) # currently generator type
+                
+                if type(callback_to_run) == coro_type: # Unfortunately also matches generators
+                    loop = uasyncio.get_event_loop()
+                    if self._task == None or self._task.done():
+                        self._task = loop.create_task(callback_to_run())
+            
+                else:
+                    try:
+                        schedule(schedule_callback, callback_to_run)
+                    
+                    except RuntimeError as e:
+                        if str(e) == "schedule queue full":
+                            raise EventFailedScheduleQueueFull(
+                                "{} - {} not run due to the micropython schedule being full".format(
+                                    str(self), callback_to_run.__name__))
+                        else:
+                            raise e
 
     @property
     def is_active(self):
@@ -1669,6 +1685,14 @@ class DigitalInputDevice(InputDevice, PinMixin):
     def when_deactivated(self, value):
         self._when_deactivated = value
     
+    def cancel(self):
+        """
+        Cancels the current uasyncio task.
+        """       
+        if self._task is not None:
+            self._task.cancel()
+            self._task = None
+        
     def close(self):
         """
         Closes the device and releases any resources. Once closed, the device
@@ -1676,6 +1700,8 @@ class DigitalInputDevice(InputDevice, PinMixin):
         """
         self._pin.irq(handler=None)
         self._pin = None
+        
+    
 
 class Switch(DigitalInputDevice):
     """
@@ -1967,3 +1993,17 @@ class DistanceSensor(PinsMixin):
         """
         return self._max_distance
 
+async def _forever():  
+    while True:
+        await uasyncio.sleep(0.01) # keep alive
+
+def run():
+    """
+    Call at the end of main to enable concurrent async event handling.
+    """
+    try:
+        loop = uasyncio.get_event_loop()
+        loop.run_until_complete(_forever())
+    except KeyboardInterrupt:
+        # Could track devices and do cleanup here
+        print("picozero stopped")
