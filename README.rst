@@ -1,6 +1,8 @@
 picozero
 ========
 
+**Experiment!** This is a fork with experimental async features. See `async example <https://github.com/tracygardner/picozero/blob/asyncio/examples/async_example.py>`_.
+
 |pypibadge| |docsbadge|
 
 A beginner-friendly library to help you use common electronics components with the Raspberry Pi Pico.
